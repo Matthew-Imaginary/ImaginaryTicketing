@@ -74,7 +74,7 @@ For help tickets:
     @commands.command(name="add", aliases=["a"], help="add a user to a ticket")
     @commands.has_role(config.roles['admin'])
     async def add(self, ctx, member: discord.Member):
-        """adds a user from a ticket"""
+        """adds a user to a ticket"""
 
         memids = [member.id for member in ctx.channel.members]
         if member.id in memids:
@@ -182,7 +182,7 @@ For help tickets:
             return await ctx.channel.send(e.args[0])
 
         member = ctx.guild.get_member(int(user_id))
-        message = f"If that is all we can help you with {member.mention}, please close this ticket."
+        message = f"If that is all we can help you with {member.mention}, please close this ticket.\n||I am a bot and this action was performed automatically||"
         random_admin = await Utility.random_admin_member(ctx.guild)
         await Utility.say_in_webhook(self.bot, random_admin, channel, random_admin.avatar.url, True, message, return_message=True, view=action_views.CloseView())
 
