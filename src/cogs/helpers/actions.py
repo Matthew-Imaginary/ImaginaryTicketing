@@ -3,7 +3,7 @@ import os
 import asyncio
 import collections
 import logging
-from typing import List, Tuple, Union, Optional
+from typing import List, Set, Tuple, Union, Optional
 
 import discord
 from discord.ext import commands
@@ -155,16 +155,20 @@ class CreateTicket(BaseActions):
         check = "2"
         db.create_ticket(self.ticket_channel.id, str(
             self.ticket_channel), self.guild.id, self.user_id, self.ticket_type, status, check)
-        if self.ticket_type == "help":
-            helper = CreateTicketHelper(
-                self.ticket_channel, self.bot, self.ticket_type, self._args[0], *self._args[1], **self._args[2])
-            await helper.challenge_selection()
-        db.update_check("0", self.ticket_channel.id)
 
         avail_mods = get(
             self.guild.roles, name=config.roles['ticket ping'])
         if self.ticket_type == "help":
-            welcome_message = f'A new ticket has been created {avail_mods.mention}'
+            helper = CreateTicketHelper(
+                self.ticket_channel, self.bot, self.ticket_type, self._args[0], *self._args[1], **self._args[2])
+            ch_authors = await helper.challenge_selection()
+            ch_authors = set(filter(lambda v: v is not None, ch_authors))
+            if len(ch_authors) == 0:
+                author_mentions = ''
+            else:
+                author_mentions = ', ' + ', '.join(
+                    [author.mention for author in ch_authors])
+            welcome_message = f'A new ticket has been created {avail_mods.mention} {author_mentions}'
         elif self.ticket_type == "submit":
             welcome_message = f'Welcome <@{self.user_id}>'
         else:
@@ -176,6 +180,8 @@ class CreateTicket(BaseActions):
 
         await ticket_channel_message.pin()
         await self.ticket_channel.purge(limit=1)
+
+        db.update_check("0", self.ticket_channel.id)
 
         await self._log_to_channel("Created ticket")
         log.info(
@@ -229,12 +235,15 @@ class CreateTicketHelper(CreateTicket):
             ch for ch in challenges if ch.category == view.children[0]._selected_values[0]]
         return category_challenges
 
-    async def _add_author_and_helpers(self, selected_challenge: Challenge):
+    async def _add_author_and_helpers(self, selected_challenge: Challenge) -> Set[Union[discord.Member, None]]:
+        ch_authors = set()
         if len(authors := selected_challenge.author.split('/')) > 1:
             for author in authors:
-                await UtilityActions._add_member(author, selected_challenge.title, self.guild, self.ticket_channel)
+                author = await UtilityActions._add_member(author, selected_challenge.title, self.guild, self.ticket_channel)
+                ch_authors.add(author)
         else:
-            await UtilityActions._add_member(selected_challenge.author, selected_challenge.title, self.guild, self.ticket_channel)
+            author = await UtilityActions._add_member(selected_challenge.author, selected_challenge.title, self.guild, self.ticket_channel)
+            ch_authors.add(author)
 
         if len(helpers := json.loads(selected_challenge.helper_id_list)):
             for helper in helpers:
@@ -243,8 +252,9 @@ class CreateTicketHelper(CreateTicket):
                         await UtilityActions._add_member(int(helper), selected_challenge.title, self.guild, self.ticket_channel)
                 except ValueError:
                     pass
+        return ch_authors  # Returns the author to be pinged on ticket creation
 
-    async def challenge_selection(self):
+    async def challenge_selection(self) -> Set[Union[discord.Member, None]]:
         # challenges = CreateTicketHelper.fake_challenges(21)
         user_solved_challenges = await ScrapeChallenges.get_user_challenges(
             self.user_id)
@@ -274,7 +284,8 @@ class CreateTicketHelper(CreateTicket):
             return message.channel == self.ticket_channel and message.author == self.user
         await self.bot.wait_for('message', check=user_response_check)
         await user_message.delete()
-        await self._add_author_and_helpers(selected_challenge)
+
+        return await self._add_author_and_helpers(selected_challenge)
 
 class UtilityActions:
     @staticmethod
@@ -306,7 +317,7 @@ class UtilityActions:
 
     # change to member after website
     @staticmethod
-    async def _add_member(member_identifier: Union[str, int], challenge_title: str, guild: discord.Guild, ticket_channel: discord.TextChannel):
+    async def _add_member(member_identifier: Union[str, int], challenge_title: str, guild: discord.Guild, ticket_channel: discord.TextChannel) -> Union[discord.Member, None]:
         # change to get_member after website
         if isinstance(member_identifier, str):
             author = guild.get_member_named(member_identifier)
@@ -318,7 +329,7 @@ class UtilityActions:
         except discord.InvalidArgument:
             log.info(
                 f"Member {member_identifier} for challenge {challenge_title} does not exist.")
-
+        return author
 
 class CloseTicket(BaseActions):
     def __init__(self, *args, **kwargs):
@@ -360,7 +371,7 @@ class CloseTicket(BaseActions):
 
         return channel_users, time_open
 
-    async def main(self):
+    async def main(self, inactivity=False):
         """closes a ticket"""
         try:
             current_status = db.get_status(self.channel_id)
@@ -415,8 +426,11 @@ class CloseTicket(BaseActions):
             name="message distribution", value=f"{channel_users}")
         close_stats_embed.add_field(
             name="time open", value=f"{time_open}")
-
-        await t_user.send(embed=close_stats_embed, file=transcript_file)
+        if inactivity:
+            message = "This ticket was automatically closed due to inactivity."
+            await t_user.send(message, embed=close_stats_embed, file=transcript_file)
+        else:
+            await t_user.send(embed=close_stats_embed, file=transcript_file)
         await embed_message.edit(embed=close_stats_embed, view=action_views.ReopenDeleteView())
 
         status = "closed"
